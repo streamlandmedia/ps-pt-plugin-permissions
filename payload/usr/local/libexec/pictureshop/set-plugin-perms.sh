@@ -2,9 +2,10 @@
 # set-plugin-perms.sh
 #
 # Sets fully open (777) permissions on the Avid Pro Tools plug-in folders.
-# Runs as root from a LaunchDaemon: at boot, at any user login (via the
-# companion LaunchAgent trigger), and whenever the folders change.
+# Runs as root from a LaunchDaemon, triggered only by a user logging in (the
+# companion LaunchAgent touches the file this daemon watches).
 #
+# There is no folder watcher: permissions are never changed mid-session.
 # Ownership is deliberately left untouched.
 
 set -u
@@ -46,9 +47,8 @@ for target in $TARGETS; do
         continue
     fi
 
-    # Only touch entries that are not already 777. chmod bumps ctime, which
-    # the daemon's WatchPaths would see as a change -- doing nothing when
-    # nothing is wrong keeps this from retriggering itself in a loop.
+    # Only touch entries that are not already 777, so a run with nothing to
+    # do writes nothing at all.
     count=$(find "$target" ! -perm 777 -print 2>/dev/null | wc -l | tr -d ' ')
 
     if [ "$count" -gt 0 ]; then

@@ -1,7 +1,8 @@
 # PS Pro Tools Plug-In Permissions
 
-Sets `777` permissions on the Avid Pro Tools plug-in folders, at boot and at
-every user login, invisibly in the background. Ownership is never changed.
+Sets `777` permissions on the Avid Pro Tools plug-in folders at every user
+login, invisibly in the background. Ownership is never changed, and nothing
+watches the folders — permissions are not altered mid-session.
 
 Targets:
 
@@ -22,19 +23,20 @@ runs as the user and cannot do it. Two jobs are installed:
 
 | Job | Runs as | Trigger |
 | --- | --- | --- |
-| `com.pictureshop.ptpluginperms.daemon` (LaunchDaemon) | root | boot; `login.trigger` changes; plug-in folders change |
+| `com.pictureshop.ptpluginperms.daemon` (LaunchDaemon) | root | `login.trigger` changes |
 | `com.pictureshop.ptpluginperms.agent` (LaunchAgent) | each logged-in user | login |
 
 At login the agent touches
 `/Library/Application Support/PictureShop/PTPluginPerms/login.trigger`.
-The daemon watches that path and wakes to do the `chmod` as root. The daemon
-also watches the plug-in folders themselves, so a new plug-in install gets
-fixed without waiting for the next login.
+The daemon watches that one path and wakes to do the `chmod` as root, then
+exits. That trigger file is the daemon's only trigger: it does not run at
+boot (`RunAtLoad` is false — a login always follows a boot, so nothing is
+missed) and it does not watch the plug-in folders. A plug-in installed
+mid-session is not touched until the next login.
 
 The worker only touches entries that are not already `777`, so a run that
-finds nothing wrong changes nothing — that's what stops the folder watch from
-retriggering itself in a loop. It also strips ACLs, which are the usual reason
-a folder that reads as `777` still refuses writes.
+finds nothing wrong writes nothing. It also strips ACLs, which are the usual
+reason a folder that reads as `777` still refuses writes.
 
 No windows, no dock icon, no notifications. Logs to
 `/var/log/com.pictureshop.ptpluginperms.log` (rotated at 256 KB).

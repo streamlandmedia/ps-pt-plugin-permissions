@@ -27,6 +27,11 @@ Interpretation applied (confirm with the user if it matters):
 - ACL stripping (`chmod -RN`) was added beyond the literal ask, because an ACL
   overrides mode bits and is the most common reason a folder that reads as `777`
   still refuses writes. Remove it if the site relies on ACLs there.
+- Login is the **only** trigger, by explicit user instruction (2026-09-08): there
+  must be no watcher that live-changes permissions. An earlier revision watched
+  the plug-in folders and self-healed them mid-session; that was removed. The
+  daemon also has `RunAtLoad` false so nothing fires at boot. Do not add either
+  back without asking.
 
 ## 2. Design and why
 
@@ -39,7 +44,7 @@ Resolution — two jobs, agent pokes daemon:
 
 | Job | Label | Runs as | Fires on |
 | --- | --- | --- | --- |
-| LaunchDaemon | `com.pictureshop.ptpluginperms.daemon` | root | boot (`RunAtLoad`); `login.trigger` modified; either plug-in folder modified |
+| LaunchDaemon | `com.pictureshop.ptpluginperms.daemon` | root | `login.trigger` modified — nothing else |
 | LaunchAgent | `com.pictureshop.ptpluginperms.agent` | each logged-in user | login (`RunAtLoad`) |
 
 Flow: user logs in → agent runs `login-trigger.sh` as that user → touches
@@ -50,12 +55,13 @@ The trigger directory is mode `1777` (sticky, world-writable) so any user can
 touch the file; the trigger file itself is `666`. That directory is the only
 world-writable thing this project creates outside the target folders.
 
-The daemon additionally watches both plug-in folders, so a plug-in installed
-mid-session gets fixed without waiting for the next login. That was not requested
-but costs nothing and covers the actual failure mode (installer writes restrictive
-modes).
+The daemon's `WatchPaths` contains that trigger file and nothing else. The
+plug-in folders are **not** watched, and `RunAtLoad` is false, so the only thing
+that ever causes a permission change is a login. Consequence to be aware of: a
+plug-in installed mid-session keeps whatever modes its installer wrote until the
+user logs out and back in. That is the requested behaviour, not a bug.
 
-### The one non-obvious correctness detail
+### Non-obvious detail: the idempotency guard
 
 `set-plugin-perms.sh` only chmods entries that are **not already** `777`:
 
@@ -63,13 +69,14 @@ modes).
 find "$target" ! -perm 777 -exec chmod 777 {} +
 ```
 
-This is load-bearing, not an optimisation. `chmod` bumps ctime, and launchd's
-`WatchPaths` uses kqueue vnode events that include `ATTRIB`. An unconditional
-recursive `chmod` would therefore trigger the folder watch, which would run the
-script, which would chmod again — a self-sustaining loop. A run that finds nothing
-wrong touches nothing, emits no vnode event, and the loop cannot start.
-`ThrottleInterval 10` in the daemon plist is a backstop, not the fix. **Do not
-replace that `find` with a plain `chmod -R`.**
+Keep this. It is what makes a no-op login run write nothing at all, and it is
+also the guard that made the removed folder watch safe — `chmod` bumps ctime and
+launchd `WatchPaths` uses kqueue vnode events that include `ATTRIB`, so an
+unconditional `chmod -R` under a folder watch self-retriggers into an infinite
+loop. With folder watching gone that loop is no longer reachable, but if anyone
+ever reinstates a folder watch against instructions, this guard is the only thing
+standing between them and a runaway daemon. `ThrottleInterval 10` is a backstop,
+not the fix.
 
 Same reasoning applies to the ACL branch: it only runs when `ls -lde` actually
 shows ACL entries.
@@ -104,7 +111,8 @@ them together:
   `uninstall.sh`, `README.md`
 - trigger dir — `set-plugin-perms.sh`, `login-trigger.sh`, `postinstall`,
   daemon plist `WatchPaths`, `uninstall.sh`
-- target folders — `set-plugin-perms.sh` (`TARGETS`), daemon plist `WatchPaths`
+- target folders — `set-plugin-perms.sh` (`TARGETS`) only; they are no longer
+  referenced in the daemon plist
 
 `postinstall` creates the trigger dir and file **before** bootstrapping the
 daemon, deliberately: launchd ignores a `WatchPaths` entry whose parent directory
@@ -124,8 +132,10 @@ sudo installer -pkg build/PSPTPluginPermissions-1.0.pkg -target /
 sudo /usr/local/libexec/pictureshop/uninstall.sh
 ```
 
-`postinstall` loads both jobs and applies permissions immediately, so no reboot
-or logout is needed after install. It loads the agent only into the console
+`postinstall` loads both jobs and, via `launchctl kickstart`, applies permissions
+once immediately, so no reboot or logout is needed after install. That kickstart
+is the one code path that runs the worker outside a login; it exists so an
+installed machine is correct straight away. It loads the agent only into the console
 user's `gui/<uid>` session; other already-logged-in fast-user-switched sessions
 pick it up at their next login.
 
@@ -145,8 +155,8 @@ Verified:
 
 - Worker logic, against temp directories with a rewritten copy of the script:
   recursive `chmod` to `777`; the `Plug-Ins (Unused)` path with a space; ACL
-  detection and strip; and critically, second consecutive run logs
-  `no changes needed` and changes nothing (idempotency → no watch loop).
+  detection and strip; and a second consecutive run logging `no changes needed`
+  and writing nothing (idempotency).
 - `sh -n` clean on all four shell scripts.
 - `plutil -lint` clean on both plists.
 - `pkgbuild` succeeds; payload contents confirmed via `pkgutil --payload-files`.
@@ -155,7 +165,8 @@ Verified:
 
 1. Actual `sudo installer` run. Nothing has been installed on any machine.
 2. Login behaviour. The agent→trigger→daemon chain has never fired for real.
-   This is the highest-risk unverified piece.
+   This is the highest-risk unverified piece, and since login is now the *only*
+   trigger, it is the whole product — if it does not fire, nothing happens.
 3. Real `chmod` on the real target paths. Those folders **do not exist on the dev
    machine** (`/Library/Application Support/Avid/` is absent — this box has no Pro
    Tools). The worker logs `skip (missing)` and exits 0 by design, so a smoke test
@@ -181,15 +192,14 @@ ls -lde "/Library/Application Support/Avid/Audio/Plug-Ins"         # 777, no ACL
 cat /var/log/com.pictureshop.ptpluginperms.log
 ```
 
-Then: log out, log in as a **different** user, and confirm a fresh
-`chmod`/`no changes needed` line appears with a new timestamp. Then
-`sudo chmod -R 700` a target folder and confirm the daemon self-heals it within
-~10s via the folder watch. Then run the uninstaller and confirm both
-`launchctl print` calls fail and the files are gone.
+Then `sudo chmod -R 700` a target folder and confirm **nothing** happens — no
+live watcher. Log out, log in as a **different** user, and confirm the folder is
+back to `777` and a fresh line appears in the log with a new timestamp. That
+single test covers both halves of the requirement: login applies, mid-session
+does not.
 
-Watch for a runaway: `log stream --predicate 'process == "launchd"'` while
-touching a plug-in folder. If the daemon respawns every 10s forever, the `find
-! -perm 777` guard has been broken — see §2.
+Then run the uninstaller and confirm both `launchctl print` calls fail and the
+files are gone.
 
 ## 6. Security position
 

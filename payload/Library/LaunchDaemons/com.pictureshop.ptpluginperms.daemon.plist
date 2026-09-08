@@ -10,20 +10,20 @@
 		<string>/usr/local/libexec/pictureshop/set-plugin-perms.sh</string>
 	</array>
 
-	<!-- Fire once at boot. -->
-	<key>RunAtLoad</key>
-	<true/>
-
-	<!-- Fire when a user logs in (the LaunchAgent touches login.trigger),
-	     and whenever anything in the plug-in folders changes. -->
+	<!-- Login is the only trigger. The per-user LaunchAgent touches
+	     login.trigger at login; this daemon wakes, does the chmod as root,
+	     and exits. The plug-in folders themselves are deliberately NOT
+	     watched -- permissions are never changed mid-session. -->
 	<key>WatchPaths</key>
 	<array>
 		<string>/Library/Application Support/PictureShop/PTPluginPerms/login.trigger</string>
-		<string>/Library/Application Support/Avid/Audio/Plug-Ins</string>
-		<string>/Library/Application Support/Avid/Audio/Plug-Ins (Unused)</string>
 	</array>
 
-	<!-- Don't respawn more than once every 10s. -->
+	<!-- No RunAtLoad: nothing should fire at boot, only at login. A login
+	     always follows a boot, so nothing is missed. -->
+	<key>RunAtLoad</key>
+	<false/>
+
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
 
