@@ -1,0 +1,35 @@
+#!/bin/sh
+# postinstall -- loads the daemon and agent right after installation, so no
+# reboot or logout is needed.
+
+set -u
+
+DAEMON_PLIST="/Library/LaunchDaemons/com.pictureshop.ptpluginperms.daemon.plist"
+AGENT_PLIST="/Library/LaunchAgents/com.pictureshop.ptpluginperms.agent.plist"
+DAEMON_LABEL="com.pictureshop.ptpluginperms.daemon"
+AGENT_LABEL="com.pictureshop.ptpluginperms.agent"
+TRIGGER_DIR="/Library/Application Support/PictureShop/PTPluginPerms"
+
+# Trigger file must exist before the daemon loads: launchd ignores a
+# WatchPaths entry whose parent directory is missing.
+mkdir -p "$TRIGGER_DIR"
+chmod 1777 "$TRIGGER_DIR"
+touch "${TRIGGER_DIR}/login.trigger"
+chmod 666 "${TRIGGER_DIR}/login.trigger"
+
+# Replace any previous version.
+launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null
+launchctl bootstrap system "$DAEMON_PLIST" 2>/dev/null || launchctl load -w "$DAEMON_PLIST" 2>/dev/null
+
+# Load the agent into the session of the user at the console, if any.
+CONSOLE_UID=$(stat -f %u /dev/console 2>/dev/null)
+if [ -n "${CONSOLE_UID:-}" ] && [ "$CONSOLE_UID" -ne 0 ]; then
+    launchctl bootout "gui/${CONSOLE_UID}/${AGENT_LABEL}" 2>/dev/null
+    launchctl bootstrap "gui/${CONSOLE_UID}" "$AGENT_PLIST" 2>/dev/null
+fi
+
+# Apply permissions immediately.
+launchctl kickstart -k "system/${DAEMON_LABEL}" 2>/dev/null || \
+    /usr/local/libexec/pictureshop/set-plugin-perms.sh
+
+exit 0

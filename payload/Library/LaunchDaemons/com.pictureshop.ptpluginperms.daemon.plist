@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.pictureshop.ptpluginperms.daemon</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/libexec/pictureshop/set-plugin-perms.sh</string>
+	</array>
+
+	<!-- Fire once at boot. -->
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- Fire when a user logs in (the LaunchAgent touches login.trigger),
+	     and whenever anything in the plug-in folders changes. -->
+	<key>WatchPaths</key>
+	<array>
+		<string>/Library/Application Support/PictureShop/PTPluginPerms/login.trigger</string>
+		<string>/Library/Application Support/Avid/Audio/Plug-Ins</string>
+		<string>/Library/Application Support/Avid/Audio/Plug-Ins (Unused)</string>
+	</array>
+
+	<!-- Don't respawn more than once every 10s. -->
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>AbandonProcessGroup</key>
+	<false/>
+
+	<key>ProcessType</key>
+	<string>Background</string>
+
+	<key>LowPriorityIO</key>
+	<true/>
+</dict>
+</plist>
